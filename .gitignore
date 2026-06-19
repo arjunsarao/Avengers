@@ -73,6 +73,7 @@ data/bbh/
 data/livemathbench/
 data/mathbench_v1/
 data/winogrande/
+data/HLE/
 
 # 保留README.md
 !data/README.md

@@ -2,6 +2,7 @@ from enum import Enum
 
 from evaluate.AIME import AIMEEvaluator
 from evaluate.GPQA import GPQAEvaluator
+from evaluate.HLE import HLEEvaluator
 from evaluate.MATH500 import MATH500Evaluator
 from evaluate.MedQA import MedQAEvaluator
 from evaluate.MMLUPro import MMLUProEvaluator
@@ -48,6 +49,7 @@ class Benchmark(Enum):
     FinQA = 'finqa'
     MedQA = 'medqa'
     GPQA = 'gpqa'
+    HLE = 'hle'
     ARCC = 'arcc'
     SimpleQA = 'simpleqa'
     # Out of distribution
@@ -99,6 +101,8 @@ class EvaluatorFactory:
             return MedQAEvaluator(max_workers=self.max_workers, mode=self.mode)
         elif task == Benchmark.GPQA:
             return GPQAEvaluator(max_workers=self.max_workers, mode=self.mode)
+        elif task == Benchmark.HLE:
+            return HLEEvaluator(max_workers=self.max_workers, mode=self.mode)
         # Affective Computing
         elif task == Benchmark.EmoryNLP:
             return EmoryNLPEvaluator(max_workers=self.max_workers, mode=self.mode)
