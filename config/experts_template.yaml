@@ -2,6 +2,8 @@ experiments:
   task: task_name
   max_workers: 8
   mode: test
+  use_http_cache: false
+  cache_dir: cache
   
 router:
   type: straight  # options: straight, gpt_router, random_router, rank_router, elo_router, routerdc_router
@@ -27,6 +29,14 @@ router:
     beta: 6.0
     default_rank: 999
     embedding_model: embedding_model_name
+    embedding_provider: openai  # options: openai, huggingface
+    embedding_base_url: http://your.embedding.endpoint/v1
+    embedding_api_key: your_embedding_api_key
+    embedding_model_path: /path/to/local/embedding/model
+    embedding_config:
+      torch_dtype: auto
+      local_files_only: true
+      trust_remote_code: true
 
 generator:
   type: direct  # 可选: direct, self_consistency, model_switch, fast_slow, slow_fast, aggregation
@@ -40,11 +50,21 @@ generator:
     
 experts:
   - name: model1_name
+    provider: openai  # options: openai, huggingface
     base_url: http://your.api.endpoint/v1
     api_key: your_api_key
     description: "the description of model1"
   
   - name: model2_name
+    provider: huggingface
+    model_path: /path/to/local/base/model
+    adapter_path: /path/to/local/adapter  # optional
+    tokenizer_path: /path/to/local/tokenizer  # optional
+    torch_dtype: bfloat16
+    device_map: auto
+    local_files_only: true
+    trust_remote_code: true
+    max_new_tokens: 2048
     base_url: http://your.api.endpoint/v1
     api_key: your_api_key
     description: "the description of model2" 

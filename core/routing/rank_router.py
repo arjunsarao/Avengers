@@ -37,6 +37,7 @@ import json
 import numpy as np
 from typing import List, Dict, Any
 
+from core.experts.huggingface_local import LocalHuggingFaceEmbeddingClient
 from core.experts.load_experts import Expert
 from core.routing.base_router import BaseRouter, RouterOutput
 from diversity.embedding_cache import EmbeddingCache
@@ -81,11 +82,19 @@ class RankRouter(BaseRouter):
                 self.available_models_id.append(id)
         assert len(self.available_models_id) == len(self.available_models), f"Length of available models ({len(self.available_models)}) does not match length of available models id ({len(self.available_models_id)})"
         
-        # Embedding helper – uses local cache automatically
-        self.embedder = EmbeddingCache(
-            base_url="http://172.30.12.113:8000/v1",
-            api_key="sk-1234567890",
-            model_name=cfg.get("embedding_model", "gte-qwen2-7b-instruct"))
+        embedding_provider = cfg.get("embedding_provider", "openai")
+        if embedding_provider == "huggingface":
+            self.embedder = LocalHuggingFaceEmbeddingClient(
+                model_path=cfg.get("embedding_model_path", cfg["embedding_model"]),
+                config=cfg.get("embedding_config", {}),
+            )
+        elif embedding_provider == "openai":
+            self.embedder = EmbeddingCache(
+                base_url=cfg.get("embedding_base_url"),
+                api_key=cfg.get("embedding_api_key"),
+                model_name=cfg.get("embedding_model", "gte-qwen2-7b-instruct"))
+        else:
+            raise ValueError(f"Unsupported embedding provider: {embedding_provider}")
 
     # ------------------------------------------------------------------
     # public API

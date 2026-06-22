@@ -66,6 +66,23 @@ experts:
     description: "Model 2 description"
 ```
 
+For downloaded Hugging Face models, set `provider: "huggingface"` and point
+`model_path` at the local model directory. Keep `name` equal to the identifier
+used by router artifacts and `available_models`.
+
+```yaml
+experts:
+  - name: "model1"
+    provider: "huggingface"
+    model_path: "models/model1"
+    adapter_path: "models/adapters/model1"   # optional
+    torch_dtype: "bfloat16"
+    device_map: "auto"
+    local_files_only: true
+    trust_remote_code: true
+    max_new_tokens: 4096
+```
+
 ### Available Tasks
 
 | Category | Tasks |
@@ -110,6 +127,12 @@ router:
     top_k: 2
     beta: 6.0
     embedding_model: "your_embedding_model"
+    embedding_provider: "huggingface"
+    embedding_model_path: "models/Qwen_Qwen3-Embedding-8B"
+    embedding_config:
+      torch_dtype: "auto"
+      local_files_only: true
+      trust_remote_code: true
 ```
 
 #### 4. GPT Router (LLM-Based Routing)

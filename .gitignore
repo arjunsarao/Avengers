@@ -74,6 +74,7 @@ data/livemathbench/
 data/mathbench_v1/
 data/winogrande/
 data/HLE/
+data/PHYSICS/
 
 # 保留README.md
 !data/README.md
@@ -81,3 +82,5 @@ data/HLE/
 core/ablation/legacy
 CLAUDE.md
 GEMINI.md
+
+models/

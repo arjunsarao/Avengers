@@ -5,6 +5,7 @@ from loguru import logger
 from openai import OpenAI
 
 from config.config_loader import load_config
+from core.experts.huggingface_local import LocalHuggingFaceChatClient
 import hishel, httpx
 import json, hashlib
 from typing import Optional
@@ -16,7 +17,7 @@ class Expert:
     base_url: str
     api_key: str
     description: str
-    client: OpenAI
+    client: object
 
 def param_only_key(request: httpx.Request, body: Optional[bytes] = b"") -> str:
     INTERESTED_FIELDS = {"model", "temperature", "top_p", "n", "messages"}
@@ -65,7 +66,8 @@ def init_http_cache(cache_dir: str):
     return transport
 
 def load_experts(config: dict) -> List[Expert]:
-    use_http_cache = config['experiments']['use_http_cache']
+    use_http_cache = config['experiments'].get('use_http_cache', False)
+    httpx_client = None
     if use_http_cache:
         cache_dir = config['experiments']['cache_dir']
         transport = init_http_cache(cache_dir)
@@ -73,16 +75,22 @@ def load_experts(config: dict) -> List[Expert]:
         
     experts = []
     for model_config in config['experts']:
-        client = OpenAI(
-            base_url=model_config['base_url'],
-            api_key=model_config['api_key'],
-            http_client=httpx_client if use_http_cache else None
-        )
+        provider = model_config.get('provider', 'openai')
+        if provider == 'huggingface':
+            client = LocalHuggingFaceChatClient(model_config)
+        elif provider == 'openai':
+            client = OpenAI(
+                base_url=model_config['base_url'],
+                api_key=model_config['api_key'],
+                http_client=httpx_client if use_http_cache else None
+            )
+        else:
+            raise ValueError(f"Unsupported expert provider: {provider}")
         experts.append(Expert(
             model_name=model_config['name'],
-            base_url=model_config['base_url'],
-            api_key=model_config['api_key'],
-            description=model_config['description'],
+            base_url=model_config.get('base_url', ''),
+            api_key=model_config.get('api_key', ''),
+            description=model_config.get('description', ''),
             client=client
         ))
     expert_names = [e.model_name for e in experts]
@@ -92,15 +100,21 @@ def load_experts(config: dict) -> List[Expert]:
     thinking_experts = []
     if 'thinking_experts' in config.keys():
         for model_config in config['thinking_experts']:
-            client = OpenAI(
-                base_url=model_config['base_url'],
-                api_key=model_config['api_key']
-            )
+            provider = model_config.get('provider', 'openai')
+            if provider == 'huggingface':
+                client = LocalHuggingFaceChatClient(model_config)
+            elif provider == 'openai':
+                client = OpenAI(
+                    base_url=model_config['base_url'],
+                    api_key=model_config['api_key']
+                )
+            else:
+                raise ValueError(f"Unsupported thinking expert provider: {provider}")
             thinking_experts.append(Expert(
                 model_name=model_config['name'],
-                base_url=model_config['base_url'],
-                api_key=model_config['api_key'],
-                description=model_config['description'],
+                base_url=model_config.get('base_url', ''),
+                api_key=model_config.get('api_key', ''),
+                description=model_config.get('description', ''),
                 client=client
             ))
         logger.info(f"Load thinking expert: {[e.model_name for e in thinking_experts]}")
