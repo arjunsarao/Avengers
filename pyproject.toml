@@ -1,0 +1,26 @@
+[project]
+name = "avengers"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "accelerate>=0.30.0",
+    "datasets>=2.12.0",
+    "hishel>=0.0.24",
+    "httpx>=0.24.0",
+    "huggingface-hub>=0.23.0",
+    "joblib>=1.5.3",
+    "loguru>=0.6.0",
+    "numpy>=1.24.0",
+    "openai>=1.0.0",
+    "peft>=0.11.0",
+    "pydantic>=2.0.0",
+    "pylatexenc>=2.10",
+    "pyyaml>=6.0",
+    "scipy>=1.10.0",
+    "sympy>=1.12",
+    "tenacity>=8.2.0",
+    "tiktoken>=0.4.0",
+    "torch>=2.0.0",
+    "tqdm>=4.65.0",
+    "transformers>=4.30.0",
+]

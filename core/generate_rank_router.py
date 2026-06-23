@@ -26,6 +26,7 @@ from sklearn.cluster import KMeans
 from sklearn.preprocessing import Normalizer
 from collections import Counter
 
+from core.experts.huggingface_local import LocalHuggingFaceEmbeddingClient
 from core.ablation.embedding_cache import EmbeddingCache
 
 
@@ -56,17 +57,25 @@ DEFAULT_MODEL_MAPPING = {
 }
 
 DEFAULT_EMBED_CONFIG = {
+    "Qwen3-Embedding-8B": {
+        "provider": "huggingface",
+        "model_name": "Qwen3-Embedding-8B",
+        "model_path": "models/Qwen_Qwen3-Embedding-8B"
+    },
     "gte-qwen2-7b-instruct": {
+        "provider": "openai",
         "url": "input your api url",
         "api_key": "input your api key",
         "model_name": "gte-qwen2-7b-instruct"
     },
     "jina-embeddings-v3": {
+        "provider": "openai",
         "url": "input your api url",
         "api_key": "input your api key",
         "model_name": "jina-embeddings-v3"
     },
     "text-embedding-3-small": {
+        "provider": "openai",
         "url": "https://api.openai.com/v1",
         "api_key": "your-openai-api-key",
         "model_name": "text-embedding-3-small"
@@ -87,7 +96,8 @@ class RankRouterGenerator:
         Initialize the rank router generator.
         
         Args:
-            embed_config: Embedding model configuration with url, model_name, and optional api_key
+            embed_config: Embedding model configuration. Use provider=openai with
+                url/api_key/model_name, or provider=huggingface with model_path.
             model_mapping: Dictionary mapping model names to model IDs (e.g., M01, M02, ...)  
             cache_dir: Directory for caching embeddings and intermediate results
         """
@@ -96,13 +106,21 @@ class RankRouterGenerator:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         
-        # Initialize embedding cache
-        self.embedder = EmbeddingCache(
-            base_url=embed_config["url"],
-            api_key=embed_config.get("api_key", "sk-1234567890"),
-            model_name=embed_config["model_name"],
-            cache_dir=cache_dir
-        )
+        provider = embed_config.get("provider", "openai")
+        if provider == "huggingface":
+            self.embedder = LocalHuggingFaceEmbeddingClient(
+                model_path=embed_config.get("model_path", embed_config["model_name"]),
+                config=embed_config.get("config", {}),
+            )
+        elif provider == "openai":
+            self.embedder = EmbeddingCache(
+                base_url=embed_config["url"],
+                api_key=embed_config.get("api_key", "sk-1234567890"),
+                model_name=embed_config["model_name"],
+                cache_dir=cache_dir
+            )
+        else:
+            raise ValueError(f"Unsupported embedding provider: {provider}")
         
         logger.info(f"Initialized RankRouterGenerator with embedding model: {embed_config['model_name']}")
     
@@ -484,13 +502,26 @@ def main():
     parser.add_argument(
         "--embed_url",
         type=str,
-        help="Custom embedding API URL (overrides default)"
+        help="Custom embedding API URL for OpenAI-compatible embeddings"
     )
     
     parser.add_argument(
         "--embed_api_key",
         type=str,
         help="API key for embedding model (if required)"
+    )
+
+    parser.add_argument(
+        "--embed_provider",
+        type=str,
+        choices=["openai", "huggingface"],
+        help="Embedding provider to use"
+    )
+
+    parser.add_argument(
+        "--embed_model_path",
+        type=str,
+        help="Local Hugging Face embedding model path"
     )
     
     parser.add_argument(
@@ -532,6 +563,10 @@ def main():
     
     # Setup embedding configuration
     embed_config = DEFAULT_EMBED_CONFIG[args.embed_model].copy()
+    if args.embed_provider:
+        embed_config["provider"] = args.embed_provider
+    if args.embed_model_path:
+        embed_config["model_path"] = args.embed_model_path
     if args.embed_url:
         embed_config["url"] = args.embed_url
     if args.embed_api_key:

@@ -16,8 +16,9 @@ set -euo pipefail
 #
 # Common overrides:
 #   DATA_PATH=data/training_data.json \
-#   EMBED_URL=http://your-embedding-api:8000/v1 \
-#   EMBED_API_KEY=your-api-key \
+#   EMBED_PROVIDER=huggingface \
+#   EMBED_MODEL=Qwen3-Embedding-8B \
+#   EMBED_MODEL_PATH=models/Qwen_Qwen3-Embedding-8B \
 #   sbatch scripts/generate_rank_router_slurm_template.sh
 
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
@@ -37,7 +38,9 @@ export TOKENIZERS_PARALLELISM=false
 
 DATA_PATH="${DATA_PATH:-data/training_data.json}"
 OUTPUT_DIR="${OUTPUT_DIR:-core/rank}"
-EMBED_MODEL="${EMBED_MODEL:-gte-qwen2-7b-instruct}"
+EMBED_PROVIDER="${EMBED_PROVIDER:-huggingface}"
+EMBED_MODEL="${EMBED_MODEL:-Qwen3-Embedding-8B}"
+EMBED_MODEL_PATH="${EMBED_MODEL_PATH:-models/Qwen_Qwen3-Embedding-8B}"
 EMBED_URL="${EMBED_URL:-}"
 EMBED_API_KEY="${EMBED_API_KEY:-}"
 N_CLUSTERS="${N_CLUSTERS:-64}"
@@ -50,6 +53,7 @@ cmd=(
   python3 core/generate_rank_router.py
   --data_path "${DATA_PATH}"
   --output_dir "${OUTPUT_DIR}"
+  --embed_provider "${EMBED_PROVIDER}"
   --embed_model "${EMBED_MODEL}"
   --n_clusters "${N_CLUSTERS}"
   --n_models "${N_MODELS}"
@@ -57,6 +61,10 @@ cmd=(
   --seed "${SEED}"
   --cache_dir "${CACHE_DIR}"
 )
+
+if [[ -n "${EMBED_MODEL_PATH}" ]]; then
+  cmd+=(--embed_model_path "${EMBED_MODEL_PATH}")
+fi
 
 if [[ -n "${EMBED_URL}" ]]; then
   cmd+=(--embed_url "${EMBED_URL}")

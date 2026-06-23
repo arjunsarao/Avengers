@@ -84,3 +84,5 @@ CLAUDE.md
 GEMINI.md
 
 models/
+
+slurm_logs/
