@@ -1,7 +1,7 @@
 [project]
 name = "avengers"
 version = "0.1.0"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "accelerate>=0.30.0",
     "datasets>=2.12.0",
@@ -9,18 +9,31 @@ dependencies = [
     "httpx>=0.24.0",
     "huggingface-hub>=0.23.0",
     "joblib>=1.5.3",
+    "kernels>=0.15.2",
     "loguru>=0.6.0",
+    "mamba-ssm>=2.3.2.post1",
     "numpy>=1.24.0",
     "openai>=1.0.0",
     "peft>=0.11.0",
     "pydantic>=2.0.0",
     "pylatexenc>=2.10",
     "pyyaml>=6.0",
+    "scikit-learn>=1.9.0",
     "scipy>=1.10.0",
     "sympy>=1.12",
     "tenacity>=8.2.0",
     "tiktoken>=0.4.0",
-    "torch>=2.0.0",
+    "torch>=2.11.0",
     "tqdm>=4.65.0",
     "transformers>=4.30.0",
 ]
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+
+[tool.uv.extra-build-dependencies]
+mamba-ssm = ["torch"]

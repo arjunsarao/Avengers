@@ -1,8 +1,48 @@
 from enum import Enum
 
+
+def _patch_multiprocess_resource_tracker() -> None:
+    try:
+        import os
+        from multiprocess import resource_tracker
+    except ImportError:
+        return
+
+    tracker_cls = resource_tracker.ResourceTracker
+    if getattr(tracker_cls, "_avengers_py312_patch", False):
+        return
+
+    def _stop_locked_compat(
+        self,
+        close=os.close,
+        waitpid=os.waitpid,
+        waitstatus_to_exitcode=os.waitstatus_to_exitcode,
+    ):
+        recursion_count = getattr(self._lock, "_recursion_count", None)
+        if recursion_count is not None and recursion_count() > 1:
+            return self._reentrant_call_error()
+        if self._fd is None:
+            return None
+        if self._pid is None:
+            return None
+
+        close(self._fd)
+        self._fd = None
+
+        waitpid(self._pid, 0)
+        self._pid = None
+        return None
+
+    tracker_cls._stop_locked = _stop_locked_compat
+    tracker_cls._avengers_py312_patch = True
+
+
+_patch_multiprocess_resource_tracker()
+
 from evaluate.AIME import AIMEEvaluator
 from evaluate.GPQA import GPQAEvaluator
 from evaluate.HLE import HLEEvaluator
+from evaluate.PHYSICS import PhysicsEvaluator
 from evaluate.MATH500 import MATH500Evaluator
 from evaluate.MedQA import MedQAEvaluator
 from evaluate.MMLUPro import MMLUProEvaluator
@@ -50,6 +90,7 @@ class Benchmark(Enum):
     MedQA = 'medqa'
     GPQA = 'gpqa'
     HLE = 'hle'
+    PHYSICS = 'physics'
     ARCC = 'arcc'
     SimpleQA = 'simpleqa'
     # Out of distribution
@@ -103,6 +144,8 @@ class EvaluatorFactory:
             return GPQAEvaluator(max_workers=self.max_workers, mode=self.mode)
         elif task == Benchmark.HLE:
             return HLEEvaluator(max_workers=self.max_workers, mode=self.mode)
+        elif task == Benchmark.PHYSICS:
+            return PhysicsEvaluator(max_workers=self.max_workers, mode=self.mode)
         # Affective Computing
         elif task == Benchmark.EmoryNLP:
             return EmoryNLPEvaluator(max_workers=self.max_workers, mode=self.mode)

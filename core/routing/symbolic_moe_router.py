@@ -31,15 +31,21 @@ class KeywordsGenerator:
         
     # 定义重试日志记录函数
     def _log_retry(retry_state):
-        exception = retry_state.outcome.exception()
+        try:
+            exception = retry_state.outcome.exception()
+        except Exception:
+            exception = None
         if exception:
-            logger.warning(f"Retrying KeywordsGenerator.generate due to error: {str(exception)}. Attempt {retry_state.attempt_number}/{retry_state.retry_object.stop.max_attempt_number}")
+            attempt = getattr(retry_state, "attempt_number", "?")
+            logger.warning(
+                f"Retrying KeywordsGenerator.generate due to error: {type(exception).__name__}: {str(exception)}. Attempt {attempt}"
+            )
         return None
     
     @retry(
         stop=stop_after_attempt(5),  # 最多重试5次
         wait=wait_exponential(multiplier=1, min=2, max=60),  # 指数退避策略：1*2^x 秒，最少2秒，最多60秒
-        retry=retry_if_exception_type((Exception)),  # 捕获所有异常进行重试
+        retry=retry_if_exception_type(Exception),  # 捕获所有异常进行重试
         before_sleep=_log_retry  # 重试前记录日志
     )
     def generate_with_retry(self, question: str):
@@ -53,17 +59,40 @@ class KeywordsGenerator:
                 top_p=self.top_p,
                 timeout=200,
             )
-            usage = response.usage
-            choices = response.choices
-            assert choices[0].message.content is not None, f"choices[0].message.content is None"
+            # robust extraction
+            choices = getattr(response, "choices", None)
+            if choices is None and isinstance(response, dict):
+                choices = response.get("choices")
+            usage = getattr(response, "usage", None)
+
+            if not choices:
+                raise AttributeError(f"No choices in response: {repr(response)}")
+
+            def _get_message_content(choice):
+                try:
+                    return choice.message.content
+                except Exception:
+                    try:
+                        return choice["message"]["content"]
+                    except Exception:
+                        try:
+                            return choice.get("text")
+                        except Exception:
+                            return None
+
+            first_output = _get_message_content(choices[0])
+            if first_output is None:
+                raise AttributeError("choices[0] has no message content")
+
+            raw_out = [(_get_message_content(choice) or "") for choice in choices]
             return {
-                "first_output": choices[0].message.content,
-                "raw_output": [choice.message.content for choice in choices],
-                "prompt_tokens": usage.prompt_tokens,
-                "completion_tokens": usage.completion_tokens
+                "first_output": first_output,
+                "raw_output": raw_out,
+                "prompt_tokens": getattr(usage, "prompt_tokens", 0) if usage else 0,
+                "completion_tokens": getattr(usage, "completion_tokens", 0) if usage else 0,
             }
         except Exception as e:
-            logger.error(f"Error in KeywordsGenerator.generate: {str(e)}, model_name: {self.model}")
+            logger.exception(f"Error in KeywordsGenerator.generate: {type(e).__name__}: {str(e)}, model_name: {self.model}")
             raise  # 重新抛出异常，让重试装饰器捕获
     
     def generate(self, question: str):

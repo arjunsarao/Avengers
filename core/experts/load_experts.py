@@ -9,7 +9,12 @@ from core.experts.huggingface_local import LocalHuggingFaceChatClient
 import hishel, httpx
 import json, hashlib
 from typing import Optional
-from hishel._utils import normalized_url
+
+try:
+    from hishel._utils import normalized_url
+except ImportError:
+    def normalized_url(url: httpx.URL) -> str:
+        return str(url)
 
 @dataclass
 class Expert:

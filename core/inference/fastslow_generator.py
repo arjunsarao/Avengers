@@ -43,15 +43,21 @@ class FastSlowGenerator(BaseGenerator):
         max_retries = self.fast_max_retries if mode == "fast" else self.slow_max_retries
         
         def _log_retry(retry_state):
-            exception = retry_state.outcome.exception()
+            try:
+                exception = retry_state.outcome.exception()
+            except Exception:
+                exception = None
             if exception:
-                logger.warning(f"Retrying FastSlowGenerator.generate due to error: {str(exception)}. Attempt {retry_state.attempt_number}/{retry_state.retry_object.stop.max_attempt_number}")
+                attempt = getattr(retry_state, "attempt_number", "?")
+                logger.warning(
+                    f"Retrying FastSlowGenerator.generate due to error: {type(exception).__name__}: {str(exception)}. Attempt {attempt}"
+                )
             return None
         
         @retry(
             stop=stop_after_attempt(max_retries),
             wait=wait_exponential(multiplier=1, min=2, max=60),
-            retry=retry_if_exception_type((Exception)),
+            retry=retry_if_exception_type(Exception),
             before_sleep=_log_retry
         )
         def _generate_impl():
@@ -74,19 +80,46 @@ class FastSlowGenerator(BaseGenerator):
                     n=samples,
                     timeout=timeout,
                 )
-                choices = response.choices
-                usage = response.usage
-                raw_output = [choice.message.content for choice in choices]
+
+                # robust extraction
+                choices = getattr(response, "choices", None) if response is not None else None
+                if choices is None and isinstance(response, dict):
+                    choices = response.get("choices")
+                usage = getattr(response, "usage", None) if response is not None else None
+
+                if not choices:
+                    raise AttributeError(f"No choices in response: {repr(response)}")
+
+                def _get_message_content(choice):
+                    try:
+                        return choice.message.content
+                    except Exception:
+                        try:
+                            return choice["message"]["content"]
+                        except Exception:
+                            try:
+                                return choice.get("text")
+                            except Exception:
+                                return None
+
+                raw_output = [(_get_message_content(choice) or "") for choice in choices]
                 assert len(raw_output) == samples, f"Mode={mode}, Expected {samples} samples, got {len(raw_output)}"
-                
+
+                first_output = _get_message_content(choices[0])
+                if first_output is None:
+                    raise AttributeError("choices[0] has no message content")
+
+                prompt_tokens = getattr(usage, "prompt_tokens", 0) if usage is not None else 0
+                completion_tokens = getattr(usage, "completion_tokens", 0) if usage is not None else 0
+
                 return GeneratorOutput(
-                    first_output=choices[0].message.content,
+                    first_output=first_output,
                     raw_output=raw_output,
-                    prompt_tokens=usage.prompt_tokens,
-                    completion_tokens=usage.completion_tokens
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
                 )
             except Exception as e:
-                logger.warning(f"Error in FastSlowGenerator._generate: {str(e)}, error model: {model}, mode: {mode}")
+                logger.exception(f"Error in FastSlowGenerator._generate: {type(e).__name__}: {str(e)}, error model: {model}, mode: {mode}")
                 raise
                 
         return _generate_impl()

@@ -16,18 +16,59 @@ The rank router works by:
 import os
 import json
 import argparse
+import sys
 from pathlib import Path
 from typing import List, Dict, Tuple
 import numpy as np
 import joblib
 from loguru import logger
-from datasets import Dataset, load_dataset, concatenate_datasets
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import Normalizer
 from collections import Counter
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from core.experts.huggingface_local import LocalHuggingFaceEmbeddingClient
 from core.ablation.embedding_cache import EmbeddingCache
+
+
+def _patch_multiprocess_resource_tracker() -> None:
+    """Avoid a Python 3.12 shutdown traceback from multiprocess cleanup."""
+    try:
+        import os
+        from multiprocess import resource_tracker
+    except ImportError:
+        return
+
+    tracker_cls = resource_tracker.ResourceTracker
+    if getattr(tracker_cls, "_avengers_py312_patch", False):
+        return
+
+    def _stop_locked_compat(
+        self,
+        close=os.close,
+        waitpid=os.waitpid,
+        waitstatus_to_exitcode=os.waitstatus_to_exitcode,
+    ):
+        recursion_count = getattr(self._lock, "_recursion_count", None)
+        if recursion_count is not None and recursion_count() > 1:
+            return self._reentrant_call_error()
+        if self._fd is None:
+            return None
+        if self._pid is None:
+            return None
+
+        close(self._fd)
+        self._fd = None
+
+        waitpid(self._pid, 0)
+        self._pid = None
+        return None
+
+    tracker_cls._stop_locked = _stop_locked_compat
+    tracker_cls._avengers_py312_patch = True
 
 
 # Default model mapping (M01-M22 format used internally)
@@ -105,7 +146,13 @@ class RankRouterGenerator:
         self.model_mapping = model_mapping or DEFAULT_MODEL_MAPPING
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        
+        self.embedder = None
+
+    def _get_embedder(self):
+        if self.embedder is not None:
+            return self.embedder
+
+        embed_config = self.embed_config
         provider = embed_config.get("provider", "openai")
         if provider == "huggingface":
             self.embedder = LocalHuggingFaceEmbeddingClient(
@@ -123,6 +170,7 @@ class RankRouterGenerator:
             raise ValueError(f"Unsupported embedding provider: {provider}")
         
         logger.info(f"Initialized RankRouterGenerator with embedding model: {embed_config['model_name']}")
+        return self.embedder
     
     def load_training_data(
         self, 
@@ -141,15 +189,43 @@ class RankRouterGenerator:
         Returns:
             Tuple of (train_set, test_set) as lists of dictionaries
         """
+        from datasets import load_dataset, concatenate_datasets
+
+        _patch_multiprocess_resource_tracker()
+
         logger.info(f"Loading training data from: {data_path}")
-        
-        dataset = load_dataset("json", data_files=data_path, split="train")
+
+        data_files = self._resolve_data_files(data_path)
+        datasets_cache_dir = self.cache_dir / "datasets"
+        datasets_cache_dir.mkdir(parents=True, exist_ok=True)
+        dataset = load_dataset(
+            "json",
+            data_files=data_files,
+            split="train",
+            cache_dir=str(datasets_cache_dir),
+        )
+        required_columns = {"query", "dataset", "records"}
+        missing_columns = required_columns - set(dataset.column_names)
+        if missing_columns:
+            raise ValueError(
+                "Rank router training data must contain columns "
+                f"{sorted(required_columns)}. Missing {sorted(missing_columns)} "
+                f"from {data_path}. If you are using raw benchmark files such as "
+                "data/PHYSICS/*_dataset_textonly.jsonl, first convert them to the "
+                "rank-router training format with per-model correctness records."
+            )
+
         dataset_names = list(set(dataset['dataset']))
         
         # Split each dataset separately to maintain balance
         subsets = []
+        filter_num_proc = int(os.environ.get("RANK_ROUTER_FILTER_NUM_PROC", "1"))
+        filter_kwargs = {}
+        if filter_num_proc > 1:
+            filter_kwargs["num_proc"] = filter_num_proc
+
         for name in dataset_names:
-            subset = dataset.filter(lambda x: x['dataset'] == name, num_proc=4)
+            subset = dataset.filter(lambda x: x['dataset'] == name, **filter_kwargs)
             split = subset.train_test_split(test_size=test_size, seed=seed)
             subsets.append(split)
         
@@ -162,6 +238,22 @@ class RankRouterGenerator:
         
         logger.info(f"Loaded {len(train_list)} training samples and {len(test_list)} test samples")
         return train_list, test_list
+
+    @staticmethod
+    def _resolve_data_files(data_path: str):
+        path = Path(data_path)
+        if path.is_dir():
+            files = sorted(
+                str(file)
+                for pattern in ("*.json", "*.jsonl")
+                for file in path.glob(pattern)
+            )
+            if not files:
+                raise FileNotFoundError(
+                    f"No .json or .jsonl files found in data directory: {data_path}"
+                )
+            return files
+        return data_path
     
     def generate_embeddings(
         self, 
@@ -183,7 +275,7 @@ class RankRouterGenerator:
         logger.info(f"Generating embeddings for {len(queries)} queries...")
         
         # Get embeddings with batching for efficiency
-        embeddings = self.embedder.batch(queries, max_batch_size=100)
+        embeddings = self._get_embedder().batch(queries, max_batch_size=100)
         embeddings = np.array(embeddings)
         
         # Normalize embeddings to unit length

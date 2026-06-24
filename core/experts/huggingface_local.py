@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import threading
+import os
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
+
+# Avoid import-time crashes in transformers.integrations.hub_kernels with
+# kernels>=0.15, while keeping the package available for model-local kernels.
+os.environ.setdefault("USE_HUB_KERNELS", "NO")
 
 import torch
 import torch.nn.functional as F
@@ -20,6 +25,74 @@ def _get_torch_dtype(dtype_name: str | None):
 
 def _clean_generation_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in kwargs.items() if value is not None}
+
+
+def _patch_weight_converter_kwargs() -> None:
+    try:
+        from transformers.core_model_loading import WeightConverter
+    except ImportError:
+        return
+
+    if getattr(WeightConverter, "_avengers_kwargs_patch", False):
+        return
+
+    original_init = WeightConverter.__init__
+
+    def _init_compat(self, source_patterns, target_patterns, operations, **kwargs):
+        return original_init(self, source_patterns, target_patterns, operations)
+
+    WeightConverter.__init__ = _init_compat
+    WeightConverter._avengers_kwargs_patch = True
+
+
+def _patch_kernels_repositories() -> None:
+    try:
+        from kernels.layer.layer import LayerRepository
+    except ImportError:
+        return
+
+    repositories = [LayerRepository]
+    try:
+        from kernels.layer.func import FuncRepository
+    except ImportError:
+        FuncRepository = None
+    if FuncRepository is not None:
+        repositories.append(FuncRepository)
+
+    for repository_cls in repositories:
+        if getattr(repository_cls, "_avengers_version_patch", False):
+            continue
+
+        original_init = repository_cls.__init__
+
+        def make_init_compat(init):
+            def _init_compat(
+                self,
+                repo_id,
+                *,
+                layer_name=None,
+                func_name=None,
+                revision=None,
+                version=None,
+                trust_remote_code=False,
+            ):
+                if revision is None and version is None:
+                    version = 1
+                kwargs = {
+                    "revision": revision,
+                    "version": version,
+                    "trust_remote_code": trust_remote_code,
+                }
+                if layer_name is not None:
+                    kwargs["layer_name"] = layer_name
+                if func_name is not None:
+                    kwargs["func_name"] = func_name
+                return init(self, repo_id, **kwargs)
+
+            return _init_compat
+
+        repository_cls.__init__ = make_init_compat(original_init)
+        repository_cls._avengers_version_patch = True
 
 
 class LocalHuggingFaceChatClient:
@@ -55,6 +128,7 @@ class LocalHuggingFaceChatClient:
         if model_config.get("attn_implementation"):
             model_kwargs["attn_implementation"] = model_config["attn_implementation"]
 
+        _patch_kernels_repositories()
         self.model = AutoModelForCausalLM.from_pretrained(self.model_path, **model_kwargs)
         if self.adapter_path:
             try:
@@ -63,6 +137,7 @@ class LocalHuggingFaceChatClient:
                 raise ImportError(
                     "Loading Hugging Face adapters requires peft. Install it with `pip install peft`."
                 ) from exc
+            _patch_weight_converter_kwargs()
             self.model = PeftModel.from_pretrained(
                 self.model,
                 self.adapter_path,
@@ -83,7 +158,8 @@ class LocalHuggingFaceChatClient:
         timeout: Optional[float] = None,
         **kwargs,
     ):
-        prompt_ids = self._encode_messages(messages)
+        encoded = self._encode_messages(messages)
+        prompt_ids = encoded["input_ids"]
         outputs = []
         completion_tokens = 0
         max_new_tokens = max_tokens or kwargs.get("max_new_tokens") or self.max_new_tokens
@@ -102,7 +178,7 @@ class LocalHuggingFaceChatClient:
 
         with self._lock, torch.inference_mode():
             for _ in range(n):
-                generated = self.model.generate(prompt_ids, **generate_kwargs)
+                generated = self.model.generate(**encoded, **generate_kwargs)
                 new_tokens = generated[0, prompt_ids.shape[-1] :]
                 completion_tokens += int(new_tokens.shape[-1])
                 outputs.append(
@@ -119,18 +195,31 @@ class LocalHuggingFaceChatClient:
         )
         return SimpleNamespace(choices=choices, usage=usage)
 
-    def _encode_messages(self, messages: List[Dict[str, str]]) -> torch.Tensor:
+    def _input_device(self) -> torch.device:
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        for parameter in self.model.parameters():
+            if parameter.device.type != "meta":
+                return parameter.device
+        return torch.device("cpu")
+
+    def _encode_messages(self, messages: List[Dict[str, str]]) -> Dict[str, torch.Tensor]:
         if hasattr(self.tokenizer, "apply_chat_template") and self.tokenizer.chat_template:
-            encoded = self.tokenizer.apply_chat_template(
+            input_ids = self.tokenizer.apply_chat_template(
                 messages,
                 add_generation_prompt=True,
                 return_tensors="pt",
             )
         else:
             prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
-            encoded = self.tokenizer(prompt + "\nassistant:", return_tensors="pt").input_ids
-        model_device = next(self.model.parameters()).device
-        return encoded.to(model_device)
+            input_ids = self.tokenizer(prompt + "\nassistant:", return_tensors="pt").input_ids
+
+        attention_mask = torch.ones_like(input_ids)
+        device = self._input_device()
+        return {
+            "input_ids": input_ids.to(device),
+            "attention_mask": attention_mask.to(device),
+        }
 
 
 class LocalHuggingFaceEmbeddingClient:

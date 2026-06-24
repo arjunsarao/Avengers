@@ -123,9 +123,13 @@ class GPTRouter(BaseRouter):
     
     # 定义重试日志记录函数
     def _log_retry(retry_state):
-        exception = retry_state.outcome.exception()
+        try:
+            exception = retry_state.outcome.exception()
+        except Exception:
+            exception = None
         if exception:
-            logger.warning(f"Retrying due to error: {str(exception)}. Attempt {retry_state.attempt_number}/{retry_state.retry_object.stop.max_attempt_number}")
+            attempt = getattr(retry_state, "attempt_number", "?")
+            logger.warning(f"Retrying due to error: {type(exception).__name__}: {str(exception)}. Attempt {attempt}")
         return None
 
     def _save_response(self, system: str, prompt: str, parsed_response: ListGPTRouterOutput | Dict, experts: List[Expert]):
@@ -151,7 +155,7 @@ class GPTRouter(BaseRouter):
     @retry(
         stop=stop_after_attempt(20),  # 最多重试5次
         wait=wait_exponential(multiplier=1, min=5, max=10),  # 指数退避策略：1*2^x 秒，最少2秒，最多60秒
-        retry=retry_if_exception_type((Exception)),  # 捕获所有异常进行重试
+        retry=retry_if_exception_type(Exception),  # 捕获所有异常进行重试
         before_sleep=_log_retry  # 重试前记录日志
     )
     def function_route(self, question: str) -> RouterOutput:
@@ -186,13 +190,13 @@ class GPTRouter(BaseRouter):
             )
         
         except Exception as e:
-            logger.warning(f"Error in function_route: {str(e)}")
+            logger.exception(f"Error in function_route: {type(e).__name__}: {str(e)}")
             raise
     
     @retry(
         stop=stop_after_attempt(10),  # 最多重试5次
         wait=wait_exponential(multiplier=1, min=5, max=60),  # 指数退避策略：1*2^x 秒，最少2秒，最多60秒
-        retry=retry_if_exception_type((Exception)),  # 捕获所有异常进行重试
+        retry=retry_if_exception_type(Exception),  # 捕获所有异常进行重试
         before_sleep=_log_retry  # 重试前记录日志
     )
     def parsed_route(self, question: str) -> RouterOutput:
@@ -225,7 +229,7 @@ class GPTRouter(BaseRouter):
                 thinking_experts=self.thinking_experts
             )
         except Exception as e:
-            logger.warning(f"Error in route function: {str(e)}")
+            logger.exception(f"Error in route function: {type(e).__name__}: {str(e)}")
             raise  # 重新抛出异常，让重试装饰器捕获
     
     def route(self, question: str):

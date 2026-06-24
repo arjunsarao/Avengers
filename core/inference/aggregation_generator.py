@@ -56,15 +56,21 @@ class AggregationGenerator(BaseGenerator):
         self.results = None
         
     def _log_retry(retry_state):
-        exception = retry_state.outcome.exception()
+        try:
+            exception = retry_state.outcome.exception()
+        except Exception:
+            exception = None
         if exception:
-            logger.warning(f"Retrying AggregationGenerator.generate due to error: {str(exception)}. Attempt {retry_state.attempt_number}/{retry_state.retry_object.stop.max_attempt_number}")
+            attempt = getattr(retry_state, "attempt_number", "?")
+            logger.warning(
+                f"Retrying AggregationGenerator.generate due to error: {type(exception).__name__}: {str(exception)}. Attempt {attempt}"
+            )
         return None
     
     @retry(
         stop=stop_after_attempt(20),  # 最多重试10次
         wait=wait_exponential(multiplier=1, min=20, max=120),  # 指数退避策略：1*2^x 秒，最少2秒，最多100秒
-        retry=retry_if_exception_type((Exception)),  # 捕获所有异常进行重试
+        retry=retry_if_exception_type(Exception),  # 捕获所有异常进行重试
         before_sleep=_log_retry  # 重试前记录日志
     )
     def _aggregation_generate(self, question: str, expert_results: str, prompt_tokens: int, completion_tokens: int) -> GeneratorOutput:
@@ -82,24 +88,38 @@ class AggregationGenerator(BaseGenerator):
                 n=1,
                 timeout=3_200,
             )
-            choices = response.choices
-            usage = response.usage
-            first_output = choices[0].message.content
+            choices = getattr(response, "choices", None)
+            if choices is None and isinstance(response, dict):
+                choices = response.get("choices")
+            usage = getattr(response, "usage", None)
+
+            if not choices:
+                raise AttributeError(f"No choices in aggregation response: {repr(response)}")
+
+            first_output = getattr(choices[0], "message", None)
+            if first_output is not None:
+                first_output = getattr(first_output, "content", None)
+            if first_output is None:
+                try:
+                    first_output = choices[0]["message"]["content"]
+                except Exception:
+                    raise AttributeError("Aggregation response choice has no message content")
+
             result = GeneratorOutput(
                 first_output=first_output,
                 raw_output=[first_output],
-                prompt_tokens=usage.prompt_tokens + prompt_tokens,
-                completion_tokens=usage.completion_tokens + completion_tokens,
+                prompt_tokens=(getattr(usage, "prompt_tokens", 0) if usage else 0) + prompt_tokens,
+                completion_tokens=(getattr(usage, "completion_tokens", 0) if usage else 0) + completion_tokens,
             )
             return result
         except Exception as e:
-            logger.error(f"Error in AggregationGenerator._aggregation_generate: {str(e)}, question: {question}, expert_results: {expert_results}")
+            logger.exception(f"Error in AggregationGenerator._aggregation_generate: {type(e).__name__}: {str(e)}, question: {question}, expert_results: {expert_results}")
             raise
     
     @retry(
         stop=stop_after_attempt(10),  # 最多重试10次
         wait=wait_exponential(multiplier=1, min=10, max=120),  # 指数退避策略：1*2^x 秒，最少2秒，最多100秒
-        retry=retry_if_exception_type((Exception)),  # 捕获所有异常进行重试
+        retry=retry_if_exception_type(Exception),  # 捕获所有异常进行重试
         before_sleep=_log_retry  # 重试前记录日志
     )
     def _generate(self, client: OpenAI, model: str, question: str) -> GeneratorOutput:
@@ -112,20 +132,39 @@ class AggregationGenerator(BaseGenerator):
                 n=self.samples,
                 timeout=2000,
             )
-            choices = response.choices
-            usage = response.usage
-            aggregation_raw_output = [choice.message.content for choice in choices]
+            choices = getattr(response, "choices", None)
+            if choices is None and isinstance(response, dict):
+                choices = response.get("choices")
+            usage = getattr(response, "usage", None)
+
+            if not choices:
+                raise AttributeError(f"No choices in response: {repr(response)}")
+
+            def _get_message_content(choice):
+                try:
+                    return choice.message.content
+                except Exception:
+                    try:
+                        return choice["message"]["content"]
+                    except Exception:
+                        return None
+
+            aggregation_raw_output = [(_get_message_content(choice) or "") for choice in choices]
             assert len(aggregation_raw_output) == self.samples, f"Expected {self.samples} samples, got {len(aggregation_raw_output)}"
-            
+
+            first_output = _get_message_content(choices[0])
+            if first_output is None:
+                raise AttributeError("choices[0] has no message content")
+
             result = GeneratorOutput(
-                first_output=choices[0].message.content,
+                first_output=first_output,
                 raw_output=aggregation_raw_output,
-                prompt_tokens=usage.prompt_tokens,
-                completion_tokens=usage.completion_tokens
+                prompt_tokens=getattr(usage, "prompt_tokens", 0) if usage else 0,
+                completion_tokens=getattr(usage, "completion_tokens", 0) if usage else 0,
             )
             return result
         except Exception as e:
-            logger.error(f"Error in AggregationGenerator._generate: {str(e)}, error model: {model}")
+            logger.exception(f"Error in AggregationGenerator._generate: {type(e).__name__}: {str(e)}, error model: {model}")
             raise  # 重新抛出异常，让重试装饰器捕获
     
     def _format_single_result(self, model_list: List[str], question: str, response_list: List[str], max_tokens: int, split_number: int = 1) -> str:
